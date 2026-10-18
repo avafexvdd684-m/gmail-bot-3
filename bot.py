@@ -73,7 +73,7 @@ def init_db():
 def get_db():
     return sqlite3.connect("database.db")
 
-# --- Helper: Channel Join Verification (Fixed) ---
+# --- Helper: Channel Join Verification ---
 async def check_channel_join(bot, user_id):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
@@ -82,7 +82,7 @@ async def check_channel_join(bot, user_id):
         return False
     except Exception as e:
         print(f"Channel check warning: {e}")
-        return True  # কোনো এরর হলে ইউজার যেন আটকে না থাকে
+        return True 
 
 # --- Keyboards ---
 def main_menu(user_id):
@@ -408,7 +408,7 @@ async def broadcast_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ সফলভাবে {sent} জন ইউজারের কাছে মেসেজ পৌঁছেছে!", reply_markup=main_menu(ADMIN_ID))
     return ConversationHandler.END
 
-# --- Admin Approval Actions ---
+# --- Admin Approval Actions (Auto Channel Notification Included) ---
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return
@@ -439,7 +439,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             conn.commit()
             await query.edit_message_text(f"{query.message.text}\n\n✅ APPROVED")
-            await context.bot.send_message(chat_id=uid, text="🎉 আপনার জিমেইল অনুমোদিত হয়েছে এবং ১৫ টাকা ব্যালেন্সে যোগ হয়েছে!")
+            await context.bot.send_message(chat_id=uid, text="🎉 আপনার জিমেইলটি ভেরিফাই করে অ্যাপ্রুভ করা হয়েছে এবং ১৫ টাকা ব্যালেন্সে যোগ হয়েছে!")
 
     elif data.startswith("rej_"):
         task_id = int(data.split("_")[1])
@@ -454,12 +454,48 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("paid_"):
         w_id = int(data.split("_")[1])
-        cur.execute("UPDATE withdrawals SET status = 'paid' WHERE id = ?", (w_id,))
-        cur.execute("SELECT user_id, amount FROM withdrawals WHERE id = ?", (w_id,))
-        uid, amt = cur.fetchone()
-        conn.commit()
-        await query.edit_message_text(f"{query.message.text}\n\n✅ PAID SUCCESS")
-        await context.bot.send_message(chat_id=uid, text=f"🎉 আপনার {amt} TK উইথড্র পেমেন্ট পাঠিয়ে দেওয়া হয়েছে!")
+        cur.execute("SELECT user_id, number, amount, status FROM withdrawals WHERE id = ?", (w_id,))
+        row = cur.fetchone()
+        
+        if row and row[3] == 'pending':
+            uid, number, amt, _ = row
+            cur.execute("UPDATE withdrawals SET status = 'paid' WHERE id = ?", (w_id,))
+            conn.commit()
+
+            # বিকাশ নম্বর হাইড করার নিয়ম (যেমন: 017****1234)
+            if len(number) >= 11:
+                masked_num = f"{number[:3]}****{number[-4:]}"
+            else:
+                masked_num = f"{number[:2]}****"
+
+            # ১. চ্যানেলে স্বয়ংক্রিয় পেমেন্ট প্রুফ পাঠানো
+            channel_proof_msg = (
+                f"✅ **নতুন পেমেন্ট সফলভাবে সম্পন্ন হয়েছে!**\n\n"
+                f"💵 পেমেন্ট পরিমাণ: **{amt:.2f} TK**\n"
+                f"📱 বিকাশ নম্বর: `{masked_num}`\n"
+                f"⚡ মেথড: bKash Personal\n"
+                f"🆔 ট্রানজেকশন আইডি: `TXN-{w_id}883`\n"
+                f"🕒 স্ট্যাটাস: **PAID (সফল)**\n\n"
+                f"🤖 কাজ শুরু করতে বটে জয়েন করুন:\n"
+                f"👉 @easy_gmail_seller_bot"
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_USERNAME, 
+                    text=channel_proof_msg, 
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Channel post failed: {e}")
+
+            # ২. অ্যাডমিন প্যানেল আপডেট
+            await query.edit_message_text(f"{query.message.text}\n\n✅ PAID & SENT TO CHANNEL")
+            
+            # ৩. ইউজারকে পার্সোনাল নোটিফিকেশন দেওয়া
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"🎉 আপনার {amt} TK বিকাশ পেমেন্ট পাঠিয়ে দেওয়া হয়েছে!")
+            except Exception:
+                pass
 
     elif data.startswith("wrej_"):
         w_id = int(data.split("_")[1])
@@ -470,7 +506,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE users SET balance = balance + ?, total_withdrawn = total_withdrawn - ? WHERE user_id = ?", (amt, amt, uid))
             conn.commit()
             await query.edit_message_text(f"{query.message.text}\n\n❌ REJECTED (REFUNDED)")
-            await context.bot.send_message(chat_id=uid, text=f"❌ উত্তোলন বাতিল হয়েছে এবং {amt} TK ব্যাক দেওয়া হয়েছে।")
+            await context.bot.send_message(chat_id=uid, text=f"❌ আপনার উত্তোলন বাতিল করা হয়েছে এবং {amt} TK ব্যালেন্সে ফেরত দেওয়া হয়েছে।")
 
     conn.close()
 
