@@ -32,6 +32,9 @@ RATE_PER_GMAIL = 15.0
 REFER_BONUS = 3.0
 MIN_WITHDRAW = 15.0
 
+# Global Channel ID Cache
+CACHED_CHANNEL_ID = None
+
 # States
 SUBMIT_EMAIL, SUBMIT_PASS, WITHDRAW_NUM, WITHDRAW_AMOUNT, BROADCAST_MSG = range(5)
 
@@ -73,10 +76,25 @@ def init_db():
 def get_db():
     return sqlite3.connect("database.db")
 
+# --- Helper: Get Exact Channel Chat ID ---
+async def resolve_channel_id(bot):
+    global CACHED_CHANNEL_ID
+    if CACHED_CHANNEL_ID:
+        return CACHED_CHANNEL_ID
+    try:
+        chat = await bot.get_chat(CHANNEL_USERNAME)
+        CACHED_CHANNEL_ID = chat.id
+        print(f"Channel Resolved Successfully: {chat.title} ({CACHED_CHANNEL_ID})")
+        return CACHED_CHANNEL_ID
+    except Exception as e:
+        print(f"Channel Resolve Error: {e}")
+        return CHANNEL_USERNAME
+
 # --- Helper: Channel Join Verification ---
 async def check_channel_join(bot, user_id):
     try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        chat_id = await resolve_channel_id(bot)
+        member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         if member.status in ['member', 'administrator', 'creator', 'restricted']:
             return True
         return False
@@ -166,7 +184,7 @@ async def submit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SUBMIT_EMAIL
 
 async def submit_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    email = update.message.text.strip()
+    email = update.message.text.strip().lower()
     if email == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
@@ -193,7 +211,11 @@ async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
-    # ব্যবহারকারী অলরেডি ডাটাবেসে নিশ্চিত করা
+    
+    # ডুপ্লিকেট জিমেইল চেক
+    cur.execute("SELECT COUNT(*) FROM tasks WHERE LOWER(email) = ?", (email,))
+    is_duplicate = cur.fetchone()[0] > 0
+
     cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     cur.execute("INSERT INTO tasks (user_id, email, password, status) VALUES (?, ?, ?, 'pending')", (user_id, email, password))
     task_id = cur.lastrowid
@@ -205,8 +227,12 @@ async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ Approve", callback_data=f"app_{task_id}"),
          InlineKeyboardButton("❌ Reject", callback_data=f"rej_{task_id}")]
     ])
+    
+    dup_warning = "\n🚨 **সতর্কতা: এই জিমেইলটি আগেও ব্যবহার/সাবমিট করা হয়েছিল!**\n" if is_duplicate else ""
+
     admin_msg = (
-        f"📩 **নতুন জিমেইল সাবমিট!**\n\n"
+        f"📩 **নতুন জিমেইল সাবমিট!**\n"
+        f"{dup_warning}\n"
         f"🆔 User ID: `{user_id}`\n"
         f"📧 Email: `{email}`\n"
         f"🔑 Pass: `{password}`\n"
@@ -343,7 +369,7 @@ async def withdraw_amount_input(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("✅ আপনার রিকোয়েস্ট জমা হয়েছে! শুক্রবার বা সোমবার বিকাশ পৌঁছে যাবে।", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
-# --- Refer & Support (Updated with Invite Link & Counters) ---
+# --- Refer & Support ---
 async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_info = await context.bot.get_me()
@@ -351,16 +377,13 @@ async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
-    # অনুমোদিত রেফার (যারা ১টি জিমেইল অ্যাপ্রুভ করিয়েছে)
     cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 1", (user_id,))
     approved_ref = cur.fetchone()[0]
     
-    # পেন্ডিং রেফার (যারা জয়েন করেছে কিন্তু কোনো কাজ এখনো সফল হয়নি)
     cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 0", (user_id,))
     pending_ref = cur.fetchone()[0]
     conn.close()
 
-    # ফরওয়ার্ড / শেয়ার করার টেক্সট
     share_text = f"🔥 ঘরে বসেই প্রতি ফ্রেশ জিমেইল সেল করে ১৫ টাকা ইনকাম করুন! ইনস্ট্যান্ট বিকাশ পেমেন্ট। এখনই জয়েন করুন: {ref_link}"
     share_url = f"https://t.me/share/url?url={ref_link}&text={share_text}"
 
@@ -433,7 +456,7 @@ async def broadcast_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ সফলভাবে {sent} জন ইউজারের কাছে মেসেজ পৌঁছেছে!", reply_markup=main_menu(ADMIN_ID))
     return ConversationHandler.END
 
-# --- Admin Approval Actions (100% Guaranteed Balance Credit) ---
+# --- Admin Approval Actions ---
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return
@@ -448,9 +471,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if row and row[1] == 'pending':
             uid = row[0]
-            # নিশ্চিত করুন ইউজারের রো ডাটাবেসে আছে
             cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
-            # জিমেইল অ্যাপ্রুভ এবং ব্যালেন্সে ১৫ টাকা যুক্ত করা
             cur.execute("UPDATE tasks SET status = 'approved' WHERE id = ?", (task_id,))
             cur.execute("""
                 UPDATE users 
@@ -459,7 +480,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 WHERE user_id = ?
             """, (RATE_PER_GMAIL, RATE_PER_GMAIL, uid))
 
-            # রেফারেল বোনাস ৩ টাকা হ্যান্ডেল করা
+            # Refer 3 TK Bonus
             cur.execute("SELECT referred_by, refer_rewarded FROM users WHERE user_id = ?", (uid,))
             ref_data = cur.fetchone()
             if ref_data and ref_data[0] and ref_data[1] == 0:
@@ -510,23 +531,39 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 masked_num = f"{number[:2]}****"
 
-            # চ্যানেলে প্রুফ নোটিফিকেশন
+            # চ্যানেলে ক্লিন পেমেন্ট প্রুফ (Req No ছাড়া)
             channel_proof_msg = (
-                f"✅ **নতুন পেমেন্ট সফলভাবে সম্পন্ন হয়েছে!**\n\n"
+                f"✅ **নতুন পেমেন্ট সফলভাবে পরিশোধ করা হয়েছে!**\n\n"
                 f"💵 পেমেন্ট পরিমাণ: **{amt:.2f} TK**\n"
                 f"📱 বিকাশ নম্বর: `{masked_num}`\n"
-                f"⚡ মেথড: bKash Personal\n"
-                f"🆔 ট্রানজেকশন আইডি: `TXN-{w_id}883`\n"
+                f"⚡ মেথড: **bKash Personal**\n"
                 f"🕒 স্ট্যাটাস: **PAID (সফল)**\n\n"
-                f"🤖 কাজ শুরু করতে বটে জয়েন করুন:\n"
+                f"🤖 এখনই জিমেইল সেল করে টাকা আয় করুন:\n"
                 f"👉 @easy_gmail_seller_bot"
             )
+            
+            # চ্যানেলে সরাসরি মেসেজ পাঠানো
+            target_chat_id = await resolve_channel_id(context.bot)
             try:
-                await context.bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_proof_msg, parse_mode="Markdown")
+                await context.bot.send_message(
+                    chat_id=target_chat_id, 
+                    text=channel_proof_msg, 
+                    parse_mode="Markdown"
+                )
+                print(f"Payment Proof Successfully Sent to Channel {target_chat_id}")
             except Exception as e:
-                print(f"Channel post failed: {e}")
+                print(f"Direct channel send failed: {e}")
+                # অল্টারনেট ফলব্যাক ট্রাই
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_USERNAME, 
+                        text=channel_proof_msg, 
+                        parse_mode="Markdown"
+                    )
+                except Exception as ex2:
+                    print(f"Fallback Channel Post Error: {ex2}")
 
-            await query.edit_message_text(f"{query.message.text}\n\n✅ PAID & SENT TO CHANNEL")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ PAID (Req #{w_id} Cleared)")
             try:
                 await context.bot.send_message(chat_id=uid, text=f"🎉 আপনার {amt} TK বিকাশ পেমেন্ট পাঠিয়ে দেওয়া হয়েছে!")
             except Exception:
@@ -607,6 +644,10 @@ async def main():
 
     await application.initialize()
     await application.start()
+    
+    # চ্যানেল আইডি প্রি-লোড করে নিশ্চিত করা
+    asyncio.create_task(resolve_channel_id(application.bot))
+
     await application.updater.start_polling(drop_pending_updates=True)
     print("Bot is successfully running!")
 
