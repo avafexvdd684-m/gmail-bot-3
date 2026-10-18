@@ -29,7 +29,7 @@ SUPPORT_LINK = "https://t.me/xyzort"
 
 # Rates
 RATE_PER_GMAIL = 15.0
-REFER_BONUS = 3.0  # আপডেট: প্রতি রেফারে ৩ টাকা
+REFER_BONUS = 3.0
 MIN_WITHDRAW = 15.0
 
 # States
@@ -73,32 +73,32 @@ def init_db():
 def get_db():
     return sqlite3.connect("database.db")
 
-# --- Helper: Channel Join Verification ---
+# --- Helper: Channel Join Verification (Fixed) ---
 async def check_channel_join(bot, user_id):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        if member.status in ['member', 'administrator', 'creator']:
+        if member.status in ['member', 'administrator', 'creator', 'restricted']:
             return True
         return False
-    except Exception:
-        return True # বট এডমিন না থাকলেও যাতে ক্র্যাশ না করে
+    except Exception as e:
+        print(f"Channel check warning: {e}")
+        return True  # কোনো এরর হলে ইউজার যেন আটকে না থাকে
 
 # --- Keyboards ---
 def main_menu(user_id):
     kb = [
-        [KeyboardButton("📥 জিমেইল জমা দিন (Submit your own)")],
-        [KeyboardButton("👤 প্রোফাইল (My Profile)"), KeyboardButton("📂 আমার অ্যাকাউন্টস (My Accounts)")],
-        [KeyboardButton("💳 উইথড্র (Withdraw)"), KeyboardButton("👥 রেফার ও আয় (Refer & Earn)")],
-        [KeyboardButton("💬 সাপোর্ট (Support)")]
+        [KeyboardButton("📥 জিমেইল জমা দিন")],
+        [KeyboardButton("👤 প্রোফাইল"), KeyboardButton("📂 আমার অ্যাকাউন্টস")],
+        [KeyboardButton("💳 উইথড্র"), KeyboardButton("👥 রেফার ও আয়")],
+        [KeyboardButton("💬 সাপোর্ট")]
     ]
-    # Admin Panel Button (শুধুমাত্র অ্যাডমিন দেখতে পাবে)
     if user_id == ADMIN_ID:
         kb.append([KeyboardButton("👑 Admin Panel")])
         
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 def back_menu():
-    return ReplyKeyboardMarkup([[KeyboardButton("🔙 ফিরে যান (Back)")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[KeyboardButton("🔙 ফিরে যান")]], resize_keyboard=True)
 
 # --- Start Handler ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,19 +119,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
     conn.close()
 
-    # Direct Channel Check
     is_joined = await check_channel_join(context.bot, user_id)
     if not is_joined:
         join_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 অফিসিয়াল চ্যানেলে যোগ দিন", url=CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ Checked / যোগ দিয়েছি", callback_data="check_join")]
+            [InlineKeyboardButton("✅ যোগ দিয়েছি (Verify)", callback_data="check_join")]
         ])
         await update.message.reply_text(
-            "👋 স্বাগতম!\n\n⚠️ বটটি ব্যবহার করার জন্য আপনাকে আমাদের অফিসিয়াল চ্যানেলে জয়েন করতে হবে। জয়েন করে নিচের 'Checked' বাটনে চাপ দিন:",
+            "👋 স্বাগতম!\n\n⚠️ বটটি ব্যবহার করতে হলে আমাদের অফিসিয়াল চ্যানেলে জয়েন থাকা বাধ্যতামূলক। জয়েন করে নিচের বাটনে চাপ দিন:",
             reply_markup=join_btn
         )
     else:
-        await update.message.reply_text("🎉 স্বাগতম! আপনি এখন বট ব্যবহার করতে পারেন।", reply_markup=main_menu(user_id))
+        await update.message.reply_text("🎉 স্বাগতম! নিচের মেনু থেকে অপশন বেছে নিন:", reply_markup=main_menu(user_id))
 
 async def check_join_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -139,23 +138,15 @@ async def check_join_btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if await check_channel_join(context.bot, user_id):
-        await query.message.delete()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
         await context.bot.send_message(chat_id=user_id, text="✅ ভেরিফিকেশন সফল হয়েছে!", reply_markup=main_menu(user_id))
     else:
-        await query.answer("❌ আপনি এখনো চ্যানেলে যোগ দেননি! অনুগ্রহ করে জয়েন করুন।", show_alert=True)
+        await query.answer("❌ আপনি এখনো চ্যানেলে যোগ দেননি! আগে জয়েন করুন।", show_alert=True)
 
-async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not await check_channel_join(context.bot, user_id):
-        join_btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 অফিসিয়াল চ্যানেলে যোগ দিন", url=CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ Verify Join", callback_data="check_join")]
-        ])
-        await update.message.reply_text("⚠️ আপনি আমাদের চ্যানেলে নেই! অ্যাক্সেস পেতে চ্যানেলে জয়েন করুন:", reply_markup=join_btn)
-        return False
-    return True
-
-# --- Back Button Handler ---
+# --- Back to Menu ---
 async def cancel_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     context.user_data.clear()
@@ -164,10 +155,9 @@ async def cancel_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Submit Gmail Flow ---
 async def submit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return ConversationHandler.END
     text = (
         "⚠️ **সতর্কতা ও নিয়মাবলী:**\n"
-        "• শুধুমাত্র পরিষ্কার ফ্রেশ Gmail হতে হবে।\n"
+        "• শুধুমাত্র ফ্রেশ ও পরিষ্কার Gmail হতে হবে।\n"
         "• 2FA অন থাকা যাবে না।\n"
         "• Recovery Email বা Phone থাকা যাবে না।\n\n"
         "👉 আপনার **Gmail ID** টি লিখুন (@gmail.com সহ):"
@@ -177,7 +167,7 @@ async def submit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def submit_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = update.message.text.strip()
-    if email == "🔙 ফিরে যান (Back)":
+    if email == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
     pattern = r"^[a-zA-Z0-9_.+-]+@gmail\.com$"
@@ -191,7 +181,7 @@ async def submit_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = update.message.text.strip()
-    if password == "🔙 ফিরে যান (Back)":
+    if password == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
     if " " in password:
@@ -220,15 +210,17 @@ async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 Pass: `{password}`\n"
         f"Task ID: #{task_id}"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown", reply_markup=admin_btn)
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown", reply_markup=admin_btn)
+    except Exception as e:
+        print(f"Admin notify failed: {e}")
+
     await update.message.reply_text("✅ সফলভাবে জমা হয়েছে! অ্যাডমিন চেক করে Approve করলেই ব্যালেন্স যোগ হবে।", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
 # --- Profile ---
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
     user_id = update.effective_user.id
-
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT balance, hold_balance, total_withdrawn FROM users WHERE user_id = ?", (user_id,))
@@ -239,7 +231,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"👤 **আপনার প্রোফাইল ড্যাশবোর্ড**\n\n"
         f"🆔 User ID: `{user_id}`\n"
-        f"💰 উপলব্ধ ব্যালেন্স: `{bal:.2f} TK`\n"
+        f"💰 মূল ব্যালেন্স: `{bal:.2f} TK`\n"
         f"⏳ হোল্ড ব্যালেন্স: `{hold:.2f} TK`\n"
         f"💳 মোট উত্তোলন: `{withdrawn:.2f} TK`\n"
         f"💵 প্রতি জিমেইল: {RATE_PER_GMAIL:.0f} TK\n"
@@ -249,9 +241,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- My Accounts ---
 async def my_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
     user_id = update.effective_user.id
-
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT email, status FROM tasks WHERE user_id = ? ORDER BY id DESC LIMIT 10", (user_id,))
@@ -271,13 +261,12 @@ async def my_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Withdraw Flow ---
 async def withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return ConversationHandler.END
     user_id = update.effective_user.id
-
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    bal = cur.fetchone()[0]
+    row = cur.fetchone()
+    bal = row[0] if row else 0.0
     conn.close()
 
     if bal < MIN_WITHDRAW:
@@ -294,7 +283,7 @@ async def withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def withdraw_num_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     num = update.message.text.strip()
-    if num == "🔙 ফিরে যান (Back)":
+    if num == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
     if len(num) < 11 or not num.isdigit():
@@ -307,7 +296,7 @@ async def withdraw_num_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def withdraw_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount_str = update.message.text.strip()
-    if amount_str == "🔙 ফিরে যান (Back)":
+    if amount_str == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
     try:
@@ -344,13 +333,16 @@ async def withdraw_amount_input(update: Update, context: ContextTypes.DEFAULT_TY
         f"💰 Amount: `{amount} TK`\n"
         f"Req ID: #{w_id}"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="Markdown", reply_markup=admin_btn)
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="Markdown", reply_markup=admin_btn)
+    except Exception:
+        pass
+        
     await update.message.reply_text("✅ আপনার রিকোয়েস্ট জমা হয়েছে! শুক্রবার বা সোমবার বিকাশ পৌঁছে যাবে।", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
 # --- Refer & Support ---
 async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
     bot_info = await context.bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={update.effective_user.id}"
     text = (
@@ -376,7 +368,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_kb = [
         [KeyboardButton("📢 Broadcast Message")],
-        [KeyboardButton("🔙 ফিরে যান (Back)")]
+        [KeyboardButton("🔙 ফিরে যান")]
     ]
     await update.message.reply_text(
         f"👑 **Admin Control Panel**\n\n"
@@ -394,7 +386,7 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def broadcast_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     msg_text = update.message.text
-    if msg_text == "🔙 ফিরে যান (Back)":
+    if msg_text == "🔙 ফিরে যান":
         return await cancel_to_menu(update, context)
 
     conn = get_db()
@@ -492,21 +484,21 @@ async def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     submit_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(📥 জিমেইল জমা দিন|📥 Submit your own)$"), submit_start)],
+        entry_points=[MessageHandler(filters.Regex("^📥 জিমেইল জমা দিন$"), submit_start)],
         states={
             SUBMIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, submit_email_input)],
             SUBMIT_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, submit_pass_input)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান \(Back\)$"), cancel_to_menu), CommandHandler("start", start)]
+        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান$"), cancel_to_menu), CommandHandler("start", start)]
     )
 
     withdraw_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^(💳 উইথড্র|💳 Withdraw)$"), withdraw_start)],
+        entry_points=[MessageHandler(filters.Regex("^💳 উইথড্র$"), withdraw_start)],
         states={
             WITHDRAW_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_num_input)],
             WITHDRAW_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_amount_input)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান \(Back\)$"), cancel_to_menu), CommandHandler("start", start)]
+        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান$"), cancel_to_menu), CommandHandler("start", start)]
     )
 
     broadcast_conv = ConversationHandler(
@@ -514,7 +506,7 @@ async def main():
         states={
             BROADCAST_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_process)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান \(Back\)$"), cancel_to_menu), CommandHandler("start", start)]
+        fallbacks=[MessageHandler(filters.Regex("^🔙 ফিরে যান$"), cancel_to_menu), CommandHandler("start", start)]
     )
 
     application.add_handler(CommandHandler("start", start))
@@ -523,11 +515,11 @@ async def main():
     application.add_handler(submit_conv)
     application.add_handler(withdraw_conv)
     application.add_handler(broadcast_conv)
-    application.add_handler(MessageHandler(filters.Regex("^🔙 ফিরে যান \(Back\)$"), cancel_to_menu))
-    application.add_handler(MessageHandler(filters.Regex("^(👤 প্রোফাইল|👤 My Profile)$"), show_profile))
-    application.add_handler(MessageHandler(filters.Regex("^(📂 আমার অ্যাকাউন্টস|📂 My Accounts)$"), my_accounts))
-    application.add_handler(MessageHandler(filters.Regex("^(👥 রেফার ও আয়|👥 Refer & Earn)$"), refer_earn))
-    application.add_handler(MessageHandler(filters.Regex("^(💬 সাপোর্ট|💬 Support)$"), support))
+    application.add_handler(MessageHandler(filters.Regex("^🔙 ফিরে যান$"), cancel_to_menu))
+    application.add_handler(MessageHandler(filters.Regex("^👤 প্রোফাইল$"), show_profile))
+    application.add_handler(MessageHandler(filters.Regex("^📂 আমার অ্যাকাউন্টস$"), my_accounts))
+    application.add_handler(MessageHandler(filters.Regex("^👥 রেফার ও আয়$"), refer_earn))
+    application.add_handler(MessageHandler(filters.Regex("^💬 সাপোর্ট$"), support))
     application.add_handler(MessageHandler(filters.Regex("^👑 Admin Panel$"), admin_panel))
 
     # Web Server
