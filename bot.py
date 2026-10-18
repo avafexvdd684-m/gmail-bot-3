@@ -193,7 +193,9 @@ async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("INSERT INTO tasks (user_id, email, password) VALUES (?, ?, ?)", (user_id, email, password))
+    # ব্যবহারকারী অলরেডি ডাটাবেসে নিশ্চিত করা
+    cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cur.execute("INSERT INTO tasks (user_id, email, password, status) VALUES (?, ?, ?, 'pending')", (user_id, email, password))
     task_id = cur.lastrowid
     cur.execute("UPDATE users SET hold_balance = hold_balance + ? WHERE user_id = ?", (RATE_PER_GMAIL, user_id))
     conn.commit()
@@ -270,7 +272,7 @@ async def withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     if bal < MIN_WITHDRAW:
-        await update.message.reply_text(f"❌ ব্যালেন্স নেই! সর্বনিম্ন উত্তোলন `{MIN_WITHDRAW} TK`। আপনার ব্যালেন্স `{bal:.2f} TK`।", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ ব্যালেন্স নেই! সর্বনিম্ন উত্তোলন `{MIN_WITHDRAW} TK`। আপনার বর্তমান ব্যালেন্স `{bal:.2f} TK`।", parse_mode="Markdown")
         return ConversationHandler.END
 
     await update.message.reply_text(
@@ -317,7 +319,7 @@ async def withdraw_amount_input(update: Update, context: ContextTypes.DEFAULT_TY
         return WITHDRAW_AMOUNT
 
     cur.execute("UPDATE users SET balance = balance - ?, total_withdrawn = total_withdrawn + ? WHERE user_id = ?", (amount, amount, user_id))
-    cur.execute("INSERT INTO withdrawals (user_id, number, amount) VALUES (?, ?, ?)", (user_id, context.user_data['bkash_num'], amount))
+    cur.execute("INSERT INTO withdrawals (user_id, number, amount, status) VALUES (?, ?, ?, 'pending')", (user_id, context.user_data['bkash_num'], amount))
     w_id = cur.lastrowid
     conn.commit()
     conn.close()
@@ -341,17 +343,40 @@ async def withdraw_amount_input(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("✅ আপনার রিকোয়েস্ট জমা হয়েছে! শুক্রবার বা সোমবার বিকাশ পৌঁছে যাবে।", reply_markup=main_menu(user_id))
     return ConversationHandler.END
 
-# --- Refer & Support ---
+# --- Refer & Support (Updated with Invite Link & Counters) ---
 async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     bot_info = await context.bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={update.effective_user.id}"
+    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+
+    conn = get_db()
+    cur = conn.cursor()
+    # অনুমোদিত রেফার (যারা ১টি জিমেইল অ্যাপ্রুভ করিয়েছে)
+    cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 1", (user_id,))
+    approved_ref = cur.fetchone()[0]
+    
+    # পেন্ডিং রেফার (যারা জয়েন করেছে কিন্তু কোনো কাজ এখনো সফল হয়নি)
+    cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 0", (user_id,))
+    pending_ref = cur.fetchone()[0]
+    conn.close()
+
+    # ফরওয়ার্ড / শেয়ার করার টেক্সট
+    share_text = f"🔥 ঘরে বসেই প্রতি ফ্রেশ জিমেইল সেল করে ১৫ টাকা ইনকাম করুন! ইনস্ট্যান্ট বিকাশ পেমেন্ট। এখনই জয়েন করুন: {ref_link}"
+    share_url = f"https://t.me/share/url?url={ref_link}&text={share_text}"
+
+    btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 রেফারেল শেয়ার করুন (Share / Invite)", url=share_url)]
+    ])
+
     text = (
-        "👥 **রেফার করে আয় করুন**\n\n"
-        "প্রতি সফল রেফারে পাবেন **৩ টাকা**! 🎁\n"
+        "👥 **রেফার ও আয় (Refer & Earn)**\n\n"
+        "প্রতিটি সফল রেফারে পাবেন **৩ টাকা**! 🎁\n"
         "⚠️ শর্ত: আপনার রেফার করা ইউজারকে অবশ্যই অন্তত ১টি জিমেইল জমা দিয়ে Approve করাতে হবে।\n\n"
-        f"🔗 আপনার রেফার লিংক:\n`{ref_link}`"
+        f"✅ অনুমোদিত রেফার (Approved): `{approved_ref}` জন\n"
+        f"⏳ অপেক্ষমাণ রেফার (Pending): `{pending_ref}` জন\n\n"
+        "👉 বন্ধুদের ইনভাইট করতে নিচের বাটনে চাপ দিন:"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=btn)
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("💬 যোগাযোগ করুন (Support)", url=SUPPORT_LINK)]])
@@ -408,7 +433,7 @@ async def broadcast_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ সফলভাবে {sent} জন ইউজারের কাছে মেসেজ পৌঁছেছে!", reply_markup=main_menu(ADMIN_ID))
     return ConversationHandler.END
 
-# --- Admin Approval Actions (Auto Channel Notification Included) ---
+# --- Admin Approval Actions (100% Guaranteed Balance Credit) ---
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return
@@ -420,16 +445,26 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = int(data.split("_")[1])
         cur.execute("SELECT user_id, status FROM tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
+        
         if row and row[1] == 'pending':
             uid = row[0]
+            # নিশ্চিত করুন ইউজারের রো ডাটাবেসে আছে
+            cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            # জিমেইল অ্যাপ্রুভ এবং ব্যালেন্সে ১৫ টাকা যুক্ত করা
             cur.execute("UPDATE tasks SET status = 'approved' WHERE id = ?", (task_id,))
-            cur.execute("UPDATE users SET balance = balance + ?, hold_balance = hold_balance - ? WHERE user_id = ?", (RATE_PER_GMAIL, RATE_PER_GMAIL, uid))
+            cur.execute("""
+                UPDATE users 
+                SET balance = balance + ?, 
+                    hold_balance = MAX(0.0, hold_balance - ?) 
+                WHERE user_id = ?
+            """, (RATE_PER_GMAIL, RATE_PER_GMAIL, uid))
 
-            # Refer 3 TK Bonus
+            # রেফারেল বোনাস ৩ টাকা হ্যান্ডেল করা
             cur.execute("SELECT referred_by, refer_rewarded FROM users WHERE user_id = ?", (uid,))
             ref_data = cur.fetchone()
             if ref_data and ref_data[0] and ref_data[1] == 0:
                 ref_id = ref_data[0]
+                cur.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (ref_id,))
                 cur.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (REFER_BONUS, ref_id))
                 cur.execute("UPDATE users SET refer_rewarded = 1 WHERE user_id = ?", (uid,))
                 try:
@@ -438,19 +473,26 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
             conn.commit()
-            await query.edit_message_text(f"{query.message.text}\n\n✅ APPROVED")
-            await context.bot.send_message(chat_id=uid, text="🎉 আপনার জিমেইলটি ভেরিফাই করে অ্যাপ্রুভ করা হয়েছে এবং ১৫ টাকা ব্যালেন্সে যোগ হয়েছে!")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ APPROVED (৳15 Added)")
+            try:
+                await context.bot.send_message(chat_id=uid, text="🎉 আপনার জিমেইলটি ভেরিফাই করে অ্যাপ্রুভ করা হয়েছে এবং ১৫ টাকা ব্যালেন্সে যোগ হয়েছে!")
+            except Exception:
+                pass
 
     elif data.startswith("rej_"):
         task_id = int(data.split("_")[1])
         cur.execute("SELECT user_id, status FROM tasks WHERE id = ?", (task_id,))
         row = cur.fetchone()
         if row and row[1] == 'pending':
+            uid = row[0]
             cur.execute("UPDATE tasks SET status = 'rejected' WHERE id = ?", (task_id,))
-            cur.execute("UPDATE users SET hold_balance = hold_balance - ? WHERE user_id = ?", (RATE_PER_GMAIL, row[0]))
+            cur.execute("UPDATE users SET hold_balance = MAX(0.0, hold_balance - ?) WHERE user_id = ?", (RATE_PER_GMAIL, uid))
             conn.commit()
             await query.edit_message_text(f"{query.message.text}\n\n❌ REJECTED")
-            await context.bot.send_message(chat_id=row[0], text="❌ আপনার জিমেইলটি সঠিক না থাকায় রিজেক্ট করা হয়েছে।")
+            try:
+                await context.bot.send_message(chat_id=uid, text="❌ আপনার জিমেইলটি সঠিক না থাকায় বাতিল (Reject) করা হয়েছে।")
+            except Exception:
+                pass
 
     elif data.startswith("paid_"):
         w_id = int(data.split("_")[1])
@@ -462,13 +504,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE withdrawals SET status = 'paid' WHERE id = ?", (w_id,))
             conn.commit()
 
-            # বিকাশ নম্বর হাইড করার নিয়ম (যেমন: 017****1234)
+            # নম্বর মাস্কিং
             if len(number) >= 11:
                 masked_num = f"{number[:3]}****{number[-4:]}"
             else:
                 masked_num = f"{number[:2]}****"
 
-            # ১. চ্যানেলে স্বয়ংক্রিয় পেমেন্ট প্রুফ পাঠানো
+            # চ্যানেলে প্রুফ নোটিফিকেশন
             channel_proof_msg = (
                 f"✅ **নতুন পেমেন্ট সফলভাবে সম্পন্ন হয়েছে!**\n\n"
                 f"💵 পেমেন্ট পরিমাণ: **{amt:.2f} TK**\n"
@@ -480,18 +522,11 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👉 @easy_gmail_seller_bot"
             )
             try:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_USERNAME, 
-                    text=channel_proof_msg, 
-                    parse_mode="Markdown"
-                )
+                await context.bot.send_message(chat_id=CHANNEL_USERNAME, text=channel_proof_msg, parse_mode="Markdown")
             except Exception as e:
                 print(f"Channel post failed: {e}")
 
-            # ২. অ্যাডমিন প্যানেল আপডেট
             await query.edit_message_text(f"{query.message.text}\n\n✅ PAID & SENT TO CHANNEL")
-            
-            # ৩. ইউজারকে পার্সোনাল নোটিফিকেশন দেওয়া
             try:
                 await context.bot.send_message(chat_id=uid, text=f"🎉 আপনার {amt} TK বিকাশ পেমেন্ট পাঠিয়ে দেওয়া হয়েছে!")
             except Exception:
@@ -506,7 +541,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE users SET balance = balance + ?, total_withdrawn = total_withdrawn - ? WHERE user_id = ?", (amt, amt, uid))
             conn.commit()
             await query.edit_message_text(f"{query.message.text}\n\n❌ REJECTED (REFUNDED)")
-            await context.bot.send_message(chat_id=uid, text=f"❌ আপনার উত্তোলন বাতিল করা হয়েছে এবং {amt} TK ব্যালেন্সে ফেরত দেওয়া হয়েছে।")
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"❌ আপনার উত্তোলন বাতিল করা হয়েছে এবং {amt} TK ব্যালেন্সে ফেরত দেওয়া হয়েছে।")
+            except Exception:
+                pass
 
     conn.close()
 
