@@ -196,15 +196,13 @@ async def submit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def submit_email_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = update.message.text.strip()
-    
-    # ব্যাক বাটন হ্যান্ডলার
     if "ফিরে যান" in raw_text or "back" in raw_text.lower() or "🔙" in raw_text:
         return await cancel_to_menu(update, context)
 
     email = raw_text.lower()
     pattern = r"^[a-zA-Z0-9_.+-]+@gmail\.com$"
     if " " in email or not re.match(pattern, email):
-        await update.message.reply_text("❌ ভুল ফরম্যাট! কোনো স্পেস ছাড়া সঠিক @gmail.com দিন (অথবা ফিরে যেতে '🔙 ফিরে যান' চাপুন):", reply_markup=back_menu())
+        await update.message.reply_text("❌ ভুল ফরম্যাট! কোনো স্পেস ছাড়া সঠিক @gmail.com দিন:", reply_markup=back_menu())
         return SUBMIT_EMAIL
 
     context.user_data['submitted_email'] = email
@@ -228,7 +226,6 @@ async def submit_pass_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
-    
     cur.execute("SELECT COUNT(*) FROM tasks WHERE LOWER(email) = ?", (email,))
     is_duplicate = cur.fetchone()[0] > 0
 
@@ -418,7 +415,6 @@ async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 1", (user_id,))
     approved_ref = cur.fetchone()[0]
-    
     cur.execute("SELECT COUNT(*) FROM users WHERE referred_by = ? AND refer_rewarded = 0", (user_id,))
     pending_ref = cur.fetchone()[0]
     conn.close()
@@ -475,28 +471,55 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=ReplyKeyboardMarkup(admin_kb, resize_keyboard=True))
 
-# --- Database Backup & Restore for Render Persistence ---
+# --- Database Backup & Restore ---
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if os.path.exists("database.db"):
-        await update.message.reply_document(
-            document=open("database.db", "rb"),
-            caption="💾 **আপনার বটের বর্তমান ডাটাবেজ ব্যাকআপ ফাইল।**\nসার্ভার রিস্টার্ট হয়ে ডাটা রিসেট হলে এই ফাইলটি বটে পাঠিয়ে ক্যাপশনে `/restore` লিখুন।"
-        )
-    else:
-        await update.message.reply_text("❌ কোনো ডাটাবেজ ফাইল পাওয়া যায়নি।")
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text(f"❌ আপনি এই কমান্ড ব্যবহার করতে পারবেন না।\nআপনার আইডি: `{user_id}` (অ্যাডমিন অনুমোদিত নয়)।", parse_mode="Markdown")
+        return
+
+    db_path = os.path.abspath("database.db")
+    if not os.path.exists(db_path):
+        init_db()
+
+    try:
+        await update.message.reply_text("⏳ ডাটাবেজ ব্যাকআপ তৈরি হচ্ছে...")
+        with open(db_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="database.db",
+                caption="💾 **আপনার বটের বর্তমান ডাটাবেজ ব্যাকআপ ফাইল।**\n\n📌 সার্ভার রিস্টার্ট হয়ে ডাটা রিসেট হলে এই ফাইলটির ওপর রিপ্লাই দিয়ে `/restore` লিখুন।"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"❌ ব্যাকআপ পাঠাতে সমস্যা হয়েছে: {e}")
 
 async def restore_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ আপনার এই অনুমতি নেই!")
+        return
+
     message = update.message
-    doc = message.document or (message.reply_to_message and message.reply_to_message.document)
-    
-    if doc and doc.file_name.endswith(".db"):
-        file = await doc.get_file()
-        await file.download_to_drive("database.db")
-        await update.message.reply_text("🎉 **অভিনন্দন! পূর্বের সব ইউজারের তথ্য ও ডাটাবেজ সফলভাবে রিস্টোর হয়েছে!**")
+    doc = message.document
+    if not doc and message.reply_to_message:
+        doc = message.reply_to_message.document
+
+    if doc and doc.file_name and doc.file_name.endswith(".db"):
+        try:
+            file = await doc.get_file()
+            await file.download_to_drive(custom_path="database.db")
+            await update.message.reply_text("🎉 **অভিনন্দন! পূর্বের সব ইউজারের তথ্য ও ব্যালেন্স সফলভাবে রিস্টোর হয়েছে!**", parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"❌ রিস্টোর করতে সমস্যা হয়েছে: {e}")
     else:
-        await update.message.reply_text("⚠️ ডাটাবেজ রিস্টোর করতে ব্যাকআপ `.db` ফাইলের রিপ্লাই দিয়ে `/restore` লিখুন।")
+        await update.message.reply_text("⚠️ দয়া করে `.db` ব্যাকআপ ফাইলের রিপ্লাইয়ে `/restore` লিখুন।")
+
+async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if "ব্যাকআপ নিন" in text:
+        await backup_command(update, context)
+    elif "ফিরে যান" in text:
+        await cancel_to_menu(update, context)
 
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
@@ -690,7 +713,7 @@ async def main():
     application.add_handler(submit_conv)
     application.add_handler(withdraw_conv)
     application.add_handler(broadcast_conv)
-    application.add_handler(MessageHandler(filters.Regex(r"^(🔙 ফিরে যান|💾 ব্যাকআপ নিন \(Backup DB\))$"), lambda u, c: backup_command(u, c) if "ব্যাকআপ" in u.message.text else cancel_to_menu(u, c)))
+    application.add_handler(MessageHandler(filters.Regex(r"^(💾 ব্যাকআপ নিন|🔙 ফিরে যান)"), handle_admin_text))
     application.add_handler(MessageHandler(filters.Regex("^👤 প্রোফাইল$"), show_profile))
     application.add_handler(MessageHandler(filters.Regex("^📂 আমার অ্যাকাউন্টস$"), my_accounts))
     application.add_handler(MessageHandler(filters.Regex("^👥 রেফার ও আয়$"), refer_earn))
