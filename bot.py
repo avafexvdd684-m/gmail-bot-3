@@ -25,7 +25,7 @@ BOT_TOKEN = "8839102402:AAH_CDCklkidfV2QbvRu_2U0bbjRrfXxXco"
 ADMIN_ID = 8865474356
 CHANNEL_USERNAME = "@easygmailseller"
 CHANNEL_LINK = "https://t.me/easygmailseller"
-SUPPORT_LINK = "https://t.me/xyzort"
+SUPPORT_LINK = "https://t.me/xyzort_bot"  # নতুন সাপোর্ট বট লিংক
 
 # Rates
 RATE_PER_GMAIL = 15.0
@@ -443,7 +443,7 @@ async def refer_earn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("💬 যোগাযোগ করুন (Support)", url=SUPPORT_LINK)]])
-    await update.message.reply_text("📞 **যেকোনো সমস্যা বা সহযোগিতার জন্য সরাসরি অ্যাডমিনের সাথে কথা বলুন:**", parse_mode="Markdown", reply_markup=btn)
+    await update.message.reply_text("📞 **যেকোনো সমস্যা বা সহযোগিতার জন্য সরাসরি সাপোর্ট বটে মেসেজ দিন:**", parse_mode="Markdown", reply_markup=btn)
 
 # --- Admin Broadcast & Panel ---
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
